@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabaseclient";
 
 export default function LoginPage() {
@@ -8,13 +8,24 @@ export default function LoginPage() {
   const [sent, setSent] = useState(false);
   const [loading, setLoading] = useState(false);
 
+  // 👇 ADD THIS HERE
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data }) => {
+      if (data.user) {
+        window.location.href = "/dashboard";
+      }
+    });
+  }, []);
+
   const sendLink = async () => {
     setLoading(true);
     const { error } = await supabase.auth.signInWithOtp({
       email,
       options: {
         emailRedirectTo:
-          typeof window !== "undefined" ? `${window.location.origin}/dashboard` : undefined,
+          typeof window !== "undefined"
+            ? `${window.location.origin}/dashboard`
+            : undefined,
       },
     });
     setLoading(false);
