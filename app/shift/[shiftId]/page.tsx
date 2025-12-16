@@ -13,6 +13,8 @@ type Shift = {
   title: string | null;
   notes: string | null;
   status: "open" | "claimed" | "completed" | "verified";
+  verified_at?: string | null;
+  verified_by?: string | null;
 };
 
 type Claim = {
@@ -32,7 +34,9 @@ export default function ShiftPage() {
   const [busy, setBusy] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  const [userId, setUserId] = useState<string>("");
+  const [userId, setUserId] = useState("");
+  const [myRole, setMyRole] = useState<string | null>(null);
+
   const [shift, setShift] = useState<Shift | null>(null);
   const [myClaim, setMyClaim] = useState<Claim | null>(null);
 
@@ -49,7 +53,7 @@ export default function ShiftPage() {
 
     const { data: shiftData, error: shiftErr } = await supabase
       .from("shifts")
-      .select("id, daycare_id, shift_date, start_time, end_time, title, notes, status")
+      .select("id, daycare_id, shift_date, start_time, end_time, title, notes, status, verified_at, verified_by")
       .eq("id", shiftId)
       .single();
 
@@ -58,11 +62,26 @@ export default function ShiftPage() {
       setLoading(false);
       return;
     }
-    setShift(shiftData as Shift);
 
-    // With your current RLS:
-    // - subs can read only their own claim
-    // - managers/admins can read claims for their daycare
+    const loadedShift = shiftData as Shift;
+    setShift(loadedShift);
+
+    // Role lookup (current RLS policy lets users read their own membership rows)
+    const { data: roleRow, error: roleErr } = await supabase
+      .from("memberships")
+      .select("role")
+      .eq("daycare_id", loadedShift.daycare_id)
+      .eq("user_id", userData.user.id)
+      .maybeSingle();
+
+    if (roleErr) {
+      setErrorMsg(roleErr.message);
+      setLoading(false);
+      return;
+    }
+    setMyRole(roleRow?.role ?? null);
+
+    // Claim lookup (subs read their own; managers/admins can read within daycare)
     const { data: claimData, error: claimErr } = await supabase
       .from("shift_claims")
       .select("id, shift_id, user_id, claimed_at, check_in_at, check_out_at")
@@ -74,8 +93,8 @@ export default function ShiftPage() {
       setLoading(false);
       return;
     }
-
     setMyClaim(claimData ? (claimData as Claim) : null);
+
     setLoading(false);
   };
 
@@ -90,7 +109,7 @@ export default function ShiftPage() {
     setBusy(true);
     setErrorMsg(null);
 
-    // DB trigger will flip shifts.status to "claimed"
+    // Trigger will flip shift -> claimed
     const { error } = await supabase.from("shift_claims").insert({
       shift_id: shift.id,
       user_id: userId,
@@ -131,7 +150,7 @@ export default function ShiftPage() {
     setBusy(true);
     setErrorMsg(null);
 
-    // DB trigger will flip shifts.status to "completed"
+    // Trigger will flip shift -> completed
     const { error } = await supabase
       .from("shift_claims")
       .update({ check_out_at: new Date().toISOString() })
@@ -147,18 +166,39 @@ export default function ShiftPage() {
     setBusy(false);
   };
 
+  const verifyShift = async () => {
+    if (!shift) return;
+
+    setBusy(true);
+    setErrorMsg(null);
+
+    const { error } = await supabase
+      .from("shifts")
+      .update({
+        status: "verified",
+        verified_at: new Date().toISOString(),
+        verified_by: userId,
+      })
+      .eq("id", shift.id);
+
+    if (error) {
+      setErrorMsg(error.message);
+      setBusy(false);
+      return;
+    }
+
+    await load();
+    setBusy(false);
+  };
+
   if (loading) return <div style={{ padding: 40 }}>Loading…</div>;
   if (!shift) return <div style={{ padding: 40 }}>Shift not found.</div>;
 
+  const isManager = myRole === "admin" || myRole === "manager";
   const iClaimedThis = !!myClaim && myClaim.user_id === userId;
 
   const canClaim = shift.status === "open" && !myClaim;
-  const canStart =
-    iClaimedThis &&
-    !myClaim?.check_in_at &&
-    shift.status !== "completed" &&
-    shift.status !== "verified";
-
+  const canStart = iClaimedThis && !myClaim?.check_in_at && shift.status !== "completed" && shift.status !== "verified";
   const canEnd =
     iClaimedThis &&
     !!myClaim?.check_in_at &&
@@ -166,13 +206,16 @@ export default function ShiftPage() {
     shift.status !== "completed" &&
     shift.status !== "verified";
 
+  const canVerify = isManager && shift.status === "completed";
+
   return (
     <div style={{ padding: 40 }}>
-      <button onClick={() => router.back()} style={{ marginBottom: 16 }}>
-        ← Back
-      </button>
+      <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+        <button onClick={() => router.back()}>← Back</button>
+        <button onClick={load}>Refresh</button>
+      </div>
 
-      <h1>{shift.title ?? "Shift"}</h1>
+      <h1 style={{ marginTop: 16 }}>{shift.title ?? "Shift"}</h1>
 
       <p style={{ marginTop: 8 }}>
         <b>Date:</b> {shift.shift_date}
@@ -190,6 +233,13 @@ export default function ShiftPage() {
       <p style={{ marginTop: 8 }}>
         <b>Status:</b> {shift.status}
       </p>
+
+      {shift.status === "verified" && (
+        <p style={{ marginTop: 8 }}>
+          <b>Verified:</b>{" "}
+          {shift.verified_at ? new Date(shift.verified_at).toLocaleString() : "—"}
+        </p>
+      )}
 
       {myClaim && (
         <div style={{ marginTop: 12 }}>
@@ -229,6 +279,12 @@ export default function ShiftPage() {
         {canEnd && (
           <button onClick={endShift} disabled={busy} style={{ padding: 10 }}>
             {busy ? "Working…" : "End Shift"}
+          </button>
+        )}
+
+        {canVerify && (
+          <button onClick={verifyShift} disabled={busy} style={{ padding: 10 }}>
+            {busy ? "Working…" : "Verify Shift"}
           </button>
         )}
       </div>
