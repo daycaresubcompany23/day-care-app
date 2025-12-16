@@ -26,6 +26,20 @@ type Claim = {
   check_out_at: string | null;
 };
 
+type RosterRow = {
+  shift_id: string;
+  daycare_id: string;
+  shift_date: string;
+  start_time: string;
+  end_time: string;
+  status: string;
+  claimant_user_id: string | null;
+  claimant_email: string | null;
+  claimed_at: string | null;
+  check_in_at: string | null;
+  check_out_at: string | null;
+};
+
 export default function ShiftPage() {
   const router = useRouter();
   const { shiftId } = useParams<{ shiftId: string }>();
@@ -38,7 +52,12 @@ export default function ShiftPage() {
   const [myRole, setMyRole] = useState<string | null>(null);
 
   const [shift, setShift] = useState<Shift | null>(null);
-  const [myClaim, setMyClaim] = useState<Claim | null>(null);
+  const [claim, setClaim] = useState<Claim | null>(null);
+
+  // Manager-only roster info (email etc.)
+  const [roster, setRoster] = useState<RosterRow | null>(null);
+
+  const isManager = myRole === "admin" || myRole === "manager";
 
   const load = async () => {
     setLoading(true);
@@ -53,7 +72,9 @@ export default function ShiftPage() {
 
     const { data: shiftData, error: shiftErr } = await supabase
       .from("shifts")
-      .select("id, daycare_id, shift_date, start_time, end_time, title, notes, status, verified_at, verified_by")
+      .select(
+        "id, daycare_id, shift_date, start_time, end_time, title, notes, status, verified_at, verified_by"
+      )
       .eq("id", shiftId)
       .single();
 
@@ -66,7 +87,6 @@ export default function ShiftPage() {
     const loadedShift = shiftData as Shift;
     setShift(loadedShift);
 
-    // Role lookup (current RLS policy lets users read their own membership rows)
     const { data: roleRow, error: roleErr } = await supabase
       .from("memberships")
       .select("role")
@@ -79,9 +99,10 @@ export default function ShiftPage() {
       setLoading(false);
       return;
     }
-    setMyRole(roleRow?.role ?? null);
 
-    // Claim lookup (subs read their own; managers/admins can read within daycare)
+    const role = roleRow?.role ?? null;
+    setMyRole(role);
+
     const { data: claimData, error: claimErr } = await supabase
       .from("shift_claims")
       .select("id, shift_id, user_id, claimed_at, check_in_at, check_out_at")
@@ -93,7 +114,25 @@ export default function ShiftPage() {
       setLoading(false);
       return;
     }
-    setMyClaim(claimData ? (claimData as Claim) : null);
+    setClaim(claimData ? (claimData as Claim) : null);
+
+    // Load roster (manager/admin only) via RPC to safely get claimant email
+    if (role === "admin" || role === "manager") {
+      const { data: rosterRows, error: rosterErr } = await supabase.rpc("get_shift_roster", {
+        p_shift_id: shiftId,
+      });
+
+      if (rosterErr) {
+        setErrorMsg(rosterErr.message);
+        setRoster(null);
+        setLoading(false);
+        return;
+      }
+
+      setRoster((rosterRows?.[0] as RosterRow) ?? null);
+    } else {
+      setRoster(null);
+    }
 
     setLoading(false);
   };
@@ -109,7 +148,6 @@ export default function ShiftPage() {
     setBusy(true);
     setErrorMsg(null);
 
-    // Trigger will flip shift -> claimed
     const { error } = await supabase.from("shift_claims").insert({
       shift_id: shift.id,
       user_id: userId,
@@ -126,8 +164,8 @@ export default function ShiftPage() {
   };
 
   const startShift = async () => {
-    if (!myClaim) return;
-    if (myClaim.check_in_at) return;
+    if (!claim) return;
+    if (claim.check_in_at) return;
 
     setBusy(true);
     setErrorMsg(null);
@@ -135,7 +173,7 @@ export default function ShiftPage() {
     const { error } = await supabase
       .from("shift_claims")
       .update({ check_in_at: new Date().toISOString() })
-      .eq("id", myClaim.id);
+      .eq("id", claim.id);
 
     if (error) setErrorMsg(error.message);
 
@@ -144,17 +182,16 @@ export default function ShiftPage() {
   };
 
   const endShift = async () => {
-    if (!myClaim) return;
-    if (!myClaim.check_in_at || myClaim.check_out_at) return;
+    if (!claim) return;
+    if (!claim.check_in_at || claim.check_out_at) return;
 
     setBusy(true);
     setErrorMsg(null);
 
-    // Trigger will flip shift -> completed
     const { error } = await supabase
       .from("shift_claims")
       .update({ check_out_at: new Date().toISOString() })
-      .eq("id", myClaim.id);
+      .eq("id", claim.id);
 
     if (error) {
       setErrorMsg(error.message);
@@ -191,22 +228,66 @@ export default function ShiftPage() {
     setBusy(false);
   };
 
+  const cancelOrUnclaim = async () => {
+    if (!claim) return;
+
+    setBusy(true);
+    setErrorMsg(null);
+
+    // DELETE claim row; trigger will set shift back to open
+    const { error } = await supabase.from("shift_claims").delete().eq("id", claim.id);
+
+    if (error) {
+      setErrorMsg(error.message);
+      setBusy(false);
+      return;
+    }
+
+    await load();
+    setBusy(false);
+  };
+
   if (loading) return <div style={{ padding: 40 }}>Loading…</div>;
   if (!shift) return <div style={{ padding: 40 }}>Shift not found.</div>;
 
-  const isManager = myRole === "admin" || myRole === "manager";
-  const iClaimedThis = !!myClaim && myClaim.user_id === userId;
+  const iClaimedThis = !!claim && claim.user_id === userId;
 
-  const canClaim = shift.status === "open" && !myClaim;
-  const canStart = iClaimedThis && !myClaim?.check_in_at && shift.status !== "completed" && shift.status !== "verified";
-  const canEnd =
+  const canClaim = shift.status === "open" && !claim;
+
+  const isSub = myRole === "substitute";
+
+  const canStart =
+    isSub &&
     iClaimedThis &&
-    !!myClaim?.check_in_at &&
-    !myClaim?.check_out_at &&
+    !!claim &&
+    !claim.check_in_at &&
+    shift.status !== "completed" &&
+    shift.status !== "verified";
+
+  const canEnd =
+    isSub &&
+    iClaimedThis &&
+    !!claim &&
+    !!claim.check_in_at &&
+    !claim.check_out_at &&
     shift.status !== "completed" &&
     shift.status !== "verified";
 
   const canVerify = isManager && shift.status === "completed";
+
+  // Cancel/unclaim rules:
+  // - Must exist a claim
+  // - Must NOT be started (check_in_at null)
+  // - Substitute can cancel their own
+  // - Manager/admin can unclaim anyone (RLS enforces)
+  const canCancel =
+    !!claim &&
+    claim.check_in_at === null &&
+    (iClaimedThis || isManager) &&
+    shift.status !== "completed" &&
+    shift.status !== "verified";
+
+  const cancelLabel = iClaimedThis ? "Cancel Claim" : "Unclaim Substitute";
 
   return (
     <div style={{ padding: 40 }}>
@@ -241,19 +322,45 @@ export default function ShiftPage() {
         </p>
       )}
 
-      {myClaim && (
+      {claim && (
         <div style={{ marginTop: 12 }}>
-          <p>
-            <b>Claimed:</b> {new Date(myClaim.claimed_at).toLocaleString()}
+          <h3>My Claim</h3>
+          <p style={{ marginTop: 8 }}>
+            <b>Claimed:</b> {new Date(claim.claimed_at).toLocaleString()}
           </p>
           <p>
-            <b>Start:</b>{" "}
-            {myClaim.check_in_at ? new Date(myClaim.check_in_at).toLocaleString() : "—"}
+            <b>Start:</b> {claim.check_in_at ? new Date(claim.check_in_at).toLocaleString() : "—"}
           </p>
           <p>
-            <b>End:</b>{" "}
-            {myClaim.check_out_at ? new Date(myClaim.check_out_at).toLocaleString() : "—"}
+            <b>End:</b> {claim.check_out_at ? new Date(claim.check_out_at).toLocaleString() : "—"}
           </p>
+        </div>
+      )}
+
+      {isManager && (
+        <div style={{ marginTop: 16 }}>
+          <h3>Roster</h3>
+          {!roster || !roster.claimant_user_id ? (
+            <p style={{ marginTop: 8 }}>No one has claimed this shift yet.</p>
+          ) : (
+            <div style={{ marginTop: 8 }}>
+              <p>
+                <b>Claimant:</b> {roster.claimant_email ?? roster.claimant_user_id}
+              </p>
+              <p>
+                <b>Claimed At:</b>{" "}
+                {roster.claimed_at ? new Date(roster.claimed_at).toLocaleString() : "—"}
+              </p>
+              <p>
+                <b>Check-in:</b>{" "}
+                {roster.check_in_at ? new Date(roster.check_in_at).toLocaleString() : "—"}
+              </p>
+              <p>
+                <b>Check-out:</b>{" "}
+                {roster.check_out_at ? new Date(roster.check_out_at).toLocaleString() : "—"}
+              </p>
+            </div>
+          )}
         </div>
       )}
 
@@ -279,6 +386,12 @@ export default function ShiftPage() {
         {canEnd && (
           <button onClick={endShift} disabled={busy} style={{ padding: 10 }}>
             {busy ? "Working…" : "End Shift"}
+          </button>
+        )}
+
+        {canCancel && (
+          <button onClick={cancelOrUnclaim} disabled={busy} style={{ padding: 10 }}>
+            {busy ? "Working…" : cancelLabel}
           </button>
         )}
 

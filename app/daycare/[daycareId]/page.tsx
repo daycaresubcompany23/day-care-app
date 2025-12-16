@@ -110,10 +110,14 @@ export default function DaycarePage() {
     return new Set(claims.filter((c) => c.user_id === userId).map((c) => c.shift_id));
   }, [claims, userId]);
 
-  const openShifts = shifts.filter((s) => s.status === "open" && !myClaimedShiftIds.has(s.id));
-  const myClaimed = shifts.filter((s) => myClaimedShiftIds.has(s.id));
   const needsVerification = shifts.filter((s) => s.status === "completed");
   const verified = shifts.filter((s) => s.status === "verified");
+  const myClaimed = shifts.filter(
+    (s) => myClaimedShiftIds.has(s.id) && s.status !== "completed" && s.status !== "verified"
+  );
+  const openShifts = shifts.filter(
+    (s) => s.status === "open" && !myClaimedShiftIds.has(s.id)
+  );
 
   const other = shifts.filter(
     (s) =>
