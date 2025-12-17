@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseclient";
 import { useParams, useRouter } from "next/navigation";
 
@@ -61,6 +61,10 @@ export default function CreateShiftPage() {
     init();
   }, [daycareId, router]);
 
+  const canSubmit = useMemo(() => {
+    return !!shiftDate && !!startTime && !!endTime && !busy;
+  }, [shiftDate, startTime, endTime, busy]);
+
   const createShift = async () => {
     setErrorMsg(null);
 
@@ -92,79 +96,141 @@ export default function CreateShiftPage() {
     router.push(`/daycare/${daycareId}`);
   };
 
-  if (loading) return <div style={{ padding: 40 }}>Loading…</div>;
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-zinc-950 text-zinc-100">
+        <div className="mx-auto max-w-2xl px-6 py-10">
+          <div className="animate-pulse text-zinc-400">Loading…</div>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div style={{ padding: 40, maxWidth: 520 }}>
-      <button onClick={() => router.push(`/daycare/${daycareId}`)} style={{ marginBottom: 16 }}>
-        ← Back
-      </button>
+    <div className="min-h-screen bg-zinc-950 text-zinc-100">
+      <div className="mx-auto max-w-2xl px-6 py-10">
+        {/* Top bar */}
+        <div className="flex items-center justify-between gap-3">
+          <button
+            onClick={() => router.push(`/daycare/${daycareId}`)}
+            className="rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm hover:bg-zinc-800"
+          >
+            ← Back
+          </button>
 
-      <h1>Create Shift</h1>
+          <span className="rounded-full border border-zinc-800 bg-zinc-900 px-2.5 py-1 text-xs text-zinc-300">
+            {myRole === "admin" ? "Admin" : "Manager"}
+          </span>
+        </div>
 
-      {errorMsg && (
-        <p style={{ marginTop: 12, color: "crimson" }}>
-          Error: {errorMsg}
-        </p>
-      )}
+        {/* Title */}
+        <div className="mt-6">
+          <h1 className="text-2xl font-semibold tracking-tight">Create Shift</h1>
+          <p className="mt-1 text-sm text-zinc-400">
+            Add coverage for a specific day and time window.
+          </p>
+        </div>
 
-      <div style={{ marginTop: 16 }}>
-        <label>Date</label>
-        <input
-          type="date"
-          value={shiftDate}
-          onChange={(e) => setShiftDate(e.target.value)}
-          style={{ width: "100%", padding: 10, marginTop: 6 }}
-        />
+        {errorMsg && (
+          <div className="mt-6 rounded-xl border border-red-900/40 bg-red-950/30 p-4 text-sm text-red-200">
+            <b className="text-red-100">Error:</b> {errorMsg}
+          </div>
+        )}
+
+        {/* Form card */}
+        <div className="mt-6 rounded-2xl border border-zinc-800 bg-zinc-900/30 p-6">
+          <div className="grid gap-4 sm:grid-cols-2">
+            {/* Date */}
+            <div className="sm:col-span-2">
+              <label className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+                Date
+              </label>
+              <input
+                type="date"
+                value={shiftDate}
+                onChange={(e) => setShiftDate(e.target.value)}
+                className="mt-2 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-3 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-zinc-700"
+              />
+            </div>
+
+            {/* Start */}
+            <div>
+              <label className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+                Start time
+              </label>
+              <input
+                type="time"
+                value={startTime}
+                onChange={(e) => setStartTime(e.target.value)}
+                className="mt-2 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-3 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-zinc-700"
+              />
+            </div>
+
+            {/* End */}
+            <div>
+              <label className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+                End time
+              </label>
+              <input
+                type="time"
+                value={endTime}
+                onChange={(e) => setEndTime(e.target.value)}
+                className="mt-2 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-3 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-zinc-700"
+              />
+            </div>
+
+            {/* Title */}
+            <div className="sm:col-span-2">
+              <label className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+                Title (optional)
+              </label>
+              <input
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder="e.g., Pre-K"
+                className="mt-2 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-3 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-zinc-700"
+              />
+            </div>
+
+            {/* Notes */}
+            <div className="sm:col-span-2">
+              <label className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+                Notes (optional)
+              </label>
+              <textarea
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                placeholder="Any special instructions..."
+                className="mt-2 min-h-[110px] w-full resize-y rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-3 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-zinc-700"
+              />
+            </div>
+          </div>
+
+          {/* Actions */}
+          <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-end">
+            <button
+              onClick={() => router.push(`/daycare/${daycareId}`)}
+              disabled={busy}
+              className="rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-3 text-sm hover:bg-zinc-800 disabled:opacity-60"
+            >
+              Cancel
+            </button>
+
+            <button
+              onClick={createShift}
+              disabled={!canSubmit}
+              className="rounded-xl bg-white px-4 py-3 text-sm font-medium text-zinc-900 hover:opacity-90 disabled:opacity-60"
+            >
+              {busy ? "Creating…" : "Create Shift"}
+            </button>
+          </div>
+        </div>
+
+        {/* Small helper */}
+        <div className="mt-4 text-xs text-zinc-500">
+          Shifts start as <span className="text-zinc-300">open</span> and can be claimed by substitutes.
+        </div>
       </div>
-
-      <div style={{ marginTop: 16 }}>
-        <label>Start Time</label>
-        <input
-          type="time"
-          value={startTime}
-          onChange={(e) => setStartTime(e.target.value)}
-          style={{ width: "100%", padding: 10, marginTop: 6 }}
-        />
-      </div>
-
-      <div style={{ marginTop: 16 }}>
-        <label>End Time</label>
-        <input
-          type="time"
-          value={endTime}
-          onChange={(e) => setEndTime(e.target.value)}
-          style={{ width: "100%", padding: 10, marginTop: 6 }}
-        />
-      </div>
-
-      <div style={{ marginTop: 16 }}>
-        <label>Title (optional)</label>
-        <input
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          placeholder="e.g., Pre-K"
-          style={{ width: "100%", padding: 10, marginTop: 6 }}
-        />
-      </div>
-
-      <div style={{ marginTop: 16 }}>
-        <label>Notes (optional)</label>
-        <textarea
-          value={notes}
-          onChange={(e) => setNotes(e.target.value)}
-          placeholder="Any special instructions..."
-          style={{ width: "100%", padding: 10, marginTop: 6, minHeight: 90 }}
-        />
-      </div>
-
-      <button
-        onClick={createShift}
-        disabled={busy}
-        style={{ marginTop: 18, padding: 12, width: "100%" }}
-      >
-        {busy ? "Creating…" : "Create Shift"}
-      </button>
     </div>
   );
 }
