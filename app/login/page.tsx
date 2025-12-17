@@ -18,21 +18,27 @@ export default function LoginPage() {
   }, []);
 
   const sendLink = async () => {
-    setLoading(true);
-    const { error } = await supabase.auth.signInWithOtp({
-      email,
-      options: {
-        emailRedirectTo:
-          typeof window !== "undefined"
-            ? `${window.location.origin}/dashboard`
-            : undefined,
-      },
-    });
-    setLoading(false);
+  setLoading(true);
 
-    if (error) alert(error.message);
-    else setSent(true);
+  const { error } = await supabase.auth.signInWithOtp({
+    email,
+    options: {
+      emailRedirectTo:
+        typeof window !== "undefined"
+          ? `${window.location.origin}/auth/callback`
+          : undefined,
+    },
+  });
+
+  setLoading(false);
+
+  if (error) {
+      alert(error.message);
+    } else {
+      setSent(true);
+    }
   };
+
 
   return (
     <div style={{ padding: 40, maxWidth: 420 }}>

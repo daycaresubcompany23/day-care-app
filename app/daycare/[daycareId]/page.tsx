@@ -20,6 +20,22 @@ type Claim = {
   user_id: string;
 };
 
+type DaycareRosterRow = {
+  shift_id: string;
+  daycare_id: string;
+  shift_date: string;
+  start_time: string;
+  end_time: string;
+  title: string | null;
+  notes: string | null;
+  status: string;
+  claimant_user_id: string | null;
+  claimant_email: string | null;
+  claimed_at: string | null;
+  check_in_at: string | null;
+  check_out_at: string | null;
+};
+
 export default function DaycarePage() {
   const router = useRouter();
   const params = useParams<{ daycareId: string }>();
@@ -34,6 +50,17 @@ export default function DaycarePage() {
 
   const [shifts, setShifts] = useState<Shift[]>([]);
   const [claims, setClaims] = useState<Claim[]>([]);
+
+  // Manager roster rows (email + timestamps)
+  const [rosterRows, setRosterRows] = useState<DaycareRosterRow[]>([]);
+
+  const isManager = myRole === "admin" || myRole === "manager";
+
+  const rosterByShiftId = useMemo(() => {
+    const map = new Map<string, DaycareRosterRow>();
+    for (const r of rosterRows) map.set(r.shift_id, r);
+    return map;
+  }, [rosterRows]);
 
   const load = async () => {
     setLoading(true);
@@ -71,8 +98,11 @@ export default function DaycarePage() {
       setLoading(false);
       return;
     }
-    setMyRole(roleRow?.role ?? null);
 
+    const role = roleRow?.role ?? null;
+    setMyRole(role);
+
+    // Shifts in this daycare
     const { data: shiftsData, error: shiftsErr } = await supabase
       .from("shifts")
       .select("id, daycare_id, shift_date, start_time, end_time, title, notes, status")
@@ -87,6 +117,7 @@ export default function DaycarePage() {
     }
     setShifts((shiftsData ?? []) as Shift[]);
 
+    // Claims (RLS will restrict for subs; managers can see within daycare)
     const { data: claimsData, error: claimsErr } = await supabase
       .from("shift_claims")
       .select("shift_id, user_id");
@@ -97,6 +128,25 @@ export default function DaycarePage() {
       return;
     }
     setClaims((claimsData ?? []) as Claim[]);
+
+    // Manager roster (single RPC call for the whole daycare)
+    const manager = role === "admin" || role === "manager";
+    if (manager) {
+      const { data: rosterData, error: rosterErr } = await supabase.rpc("get_daycare_roster", {
+        p_daycare_id: daycareId,
+      });
+
+      if (rosterErr) {
+        setErrorMsg(rosterErr.message);
+        setRosterRows([]);
+        setLoading(false);
+        return;
+      }
+
+      setRosterRows((rosterData ?? []) as DaycareRosterRow[]);
+    } else {
+      setRosterRows([]);
+    }
 
     setLoading(false);
   };
@@ -110,24 +160,32 @@ export default function DaycarePage() {
     return new Set(claims.filter((c) => c.user_id === userId).map((c) => c.shift_id));
   }, [claims, userId]);
 
+  // Buckets
   const needsVerification = shifts.filter((s) => s.status === "completed");
   const verified = shifts.filter((s) => s.status === "verified");
+
+  const claimedShifts = shifts.filter((s) => s.status === "claimed");
+
   const myClaimed = shifts.filter(
-    (s) => myClaimedShiftIds.has(s.id) && s.status !== "completed" && s.status !== "verified"
-  );
-  const openShifts = shifts.filter(
-    (s) => s.status === "open" && !myClaimedShiftIds.has(s.id)
-  );
-
-  const other = shifts.filter(
     (s) =>
-      !openShifts.some((x) => x.id === s.id) &&
-      !myClaimed.some((x) => x.id === s.id) &&
-      !needsVerification.some((x) => x.id === s.id) &&
-      !verified.some((x) => x.id === s.id)
+      !isManager &&
+      myClaimedShiftIds.has(s.id) &&
+      s.status !== "completed" &&
+      s.status !== "verified"
   );
 
-  const isManager = myRole === "admin" || myRole === "manager";
+  const openShifts = shifts.filter((s) => s.status === "open" && !myClaimedShiftIds.has(s.id));
+
+  // "Other" only for subs; managers don't need it
+  const other = isManager
+    ? []
+    : shifts.filter(
+        (s) =>
+          !openShifts.some((x) => x.id === s.id) &&
+          !myClaimed.some((x) => x.id === s.id) &&
+          !needsVerification.some((x) => x.id === s.id) &&
+          !verified.some((x) => x.id === s.id)
+      );
 
   if (loading) return <div style={{ padding: 40 }}>Loading…</div>;
 
@@ -152,11 +210,65 @@ export default function DaycarePage() {
         </p>
       )}
 
-      <Section title="Open Shifts" emptyText="No open shifts yet." shifts={openShifts} onOpen={(id) => router.push(`/shift/${id}`)} />
-      <Section title="My Claimed" emptyText="You haven't claimed any shifts." shifts={myClaimed} onOpen={(id) => router.push(`/shift/${id}`)} />
-      <Section title="Needs Verification" emptyText="No shifts need verification." shifts={needsVerification} onOpen={(id) => router.push(`/shift/${id}`)} />
-      <Section title="Verified" emptyText="No verified shifts yet." shifts={verified} onOpen={(id) => router.push(`/shift/${id}`)} />
-      <Section title="Other" emptyText="Nothing else here yet." shifts={other} onOpen={(id) => router.push(`/shift/${id}`)} />
+      <Section
+        title="Open Shifts"
+        emptyText="No open shifts yet."
+        shifts={openShifts}
+        onOpen={(id) => router.push(`/shift/${id}`)}
+        isManager={isManager}
+        rosterByShiftId={rosterByShiftId}
+      />
+
+      {!isManager && (
+        <Section
+          title="My Claimed"
+          emptyText="You haven't claimed any shifts."
+          shifts={myClaimed}
+          onOpen={(id) => router.push(`/shift/${id}`)}
+          isManager={isManager}
+          rosterByShiftId={rosterByShiftId}
+        />
+      )}
+
+      {isManager && (
+        <Section
+          title="Claimed Shifts"
+          emptyText="No shifts are currently claimed."
+          shifts={claimedShifts}
+          onOpen={(id) => router.push(`/shift/${id}`)}
+          isManager={isManager}
+          rosterByShiftId={rosterByShiftId}
+        />
+      )}
+
+      <Section
+        title="Needs Verification"
+        emptyText="No shifts need verification."
+        shifts={needsVerification}
+        onOpen={(id) => router.push(`/shift/${id}`)}
+        isManager={isManager}
+        rosterByShiftId={rosterByShiftId}
+      />
+
+      <Section
+        title="Verified"
+        emptyText="No verified shifts yet."
+        shifts={verified}
+        onOpen={(id) => router.push(`/shift/${id}`)}
+        isManager={isManager}
+        rosterByShiftId={rosterByShiftId}
+      />
+
+      {!isManager && (
+        <Section
+          title="Other"
+          emptyText="Nothing else here yet."
+          shifts={other}
+          onOpen={(id) => router.push(`/shift/${id}`)}
+          isManager={isManager}
+          rosterByShiftId={rosterByShiftId}
+        />
+      )}
     </div>
   );
 }
@@ -166,25 +278,61 @@ function Section({
   emptyText,
   shifts,
   onOpen,
+  isManager,
+  rosterByShiftId,
 }: {
   title: string;
   emptyText: string;
-  shifts: any[];
+  shifts: Shift[];
   onOpen: (id: string) => void;
+  isManager: boolean;
+  rosterByShiftId: Map<string, DaycareRosterRow>;
 }) {
   return (
     <div style={{ marginTop: 24 }}>
       <h2>{title}</h2>
+
       {shifts.length === 0 ? (
         <p style={{ marginTop: 8 }}>{emptyText}</p>
       ) : (
         <ul style={{ marginTop: 8 }}>
-          {shifts.map((s: any) => (
-            <li key={s.id} style={{ cursor: "pointer", marginTop: 8 }} onClick={() => onOpen(s.id)}>
-              <b>{s.shift_date}</b> — {s.start_time}–{s.end_time}
-              {s.title ? ` • ${s.title}` : ""} • <i>{s.status}</i>
-            </li>
-          ))}
+          {shifts.map((s) => {
+            const r = isManager ? rosterByShiftId.get(s.id) : null;
+            const hasClaimant = !!r?.claimant_user_id;
+
+            return (
+              <li
+                key={s.id}
+                style={{ cursor: "pointer", marginTop: 8 }}
+                onClick={() => onOpen(s.id)}
+              >
+                <b>{s.shift_date}</b> — {s.start_time}–{s.end_time}
+                {s.title ? ` • ${s.title}` : ""} • <i>{s.status}</i>
+
+                {isManager && hasClaimant && (
+                  <div style={{ marginTop: 4, fontSize: 13 }}>
+                    <span>
+                      <b>Claimed by:</b> {r?.claimant_email ?? r?.claimant_user_id}
+                    </span>
+
+                    {r?.check_in_at && (
+                      <span>
+                        {" "}
+                        • <b>In:</b> {new Date(r.check_in_at).toLocaleString()}
+                      </span>
+                    )}
+
+                    {r?.check_out_at && (
+                      <span>
+                        {" "}
+                        • <b>Out:</b> {new Date(r.check_out_at).toLocaleString()}
+                      </span>
+                    )}
+                  </div>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>
